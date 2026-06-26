@@ -1,0 +1,321 @@
+import tkinter as tk
+from tkinter import ttk, messagebox, simpledialog
+
+# ---------- Player Class ----------
+class Player:
+    def __init__(self, name, rating=1200, fid="", fed=""):
+        self.name = name
+        self.rating = rating
+        self.fid = fid
+        self.fed = fed
+        self.points = 0.0
+        self.opponents = []      # opponent names (already played)
+        self.colors = []          # 'white' or 'black' played
+        self.bye = False
+
+    def __repr__(self):
+        return f"{self.name} ({self.rating})"
+
+
+# ---------- Tournament Manager ----------
+class Tournament:
+    def __init__(self):
+        self.players = []
+        self.current_round = 0
+        self.pairings = []   # list of (white, black) for current round
+        self.round_results = []   # store each round's pairings & results
+
+    def add_player(self, name, rating):
+        self.players.append(Player(name, rating))
+
+    def remove_player(self, name):
+        self.players = [p for p in self.players if p.name != name]
+
+    def clear_all(self):
+        self.players.clear()
+        self.current_round = 0
+        self.pairings.clear()
+        self.round_results.clear()
+
+    def get_standings(self):
+        return sorted(self.players, key=lambda p: (-p.points, -p.rating))
+
+    def pair_first_round(self):
+        """Standard Swiss first round with alternating colors"""
+        if len(self.players) < 2:
+            return []
+        # Sort by rating descending, then name
+        sorted_players = sorted(self.players, key=lambda p: (-p.rating, p.name))
+        n = len(sorted_players)
+        mid = n // 2
+        top = sorted_players[:mid]
+        bottom = sorted_players[mid:]
+        pairs = []
+        # If odd number, last player in bottom gets bye
+        if n % 2 == 1:
+            bye_player = bottom.pop()
+            bye_player.bye = True
+            bye_player.points += 1.0
+            pairs.append((bye_player, None))
+        # Pair with alternating colors: even index => top white, bottom black
+        # odd index => top black, bottom white
+        for i in range(len(bottom)):
+            if i % 2 == 0:
+                white = top[i]
+                black = bottom[i]
+            else:
+                white = bottom[i]
+                black = top[i]
+            pairs.append((white, black))
+        self.pairings = pairs
+        return pairs
+
+    def pair_next_round(self):
+        """Basic Swiss pairing based on points, avoiding previous opponents"""
+        players = self.get_standings()  # sorted by points, rating
+        # Exclude players who already had a bye in this tournament? Keep it simple
+        available = [p for p in players]
+        paired = []
+        used = set()
+        pairs = []
+
+        for i in range(len(available)):
+            if available[i].name in used:
+                continue
+            white = available[i]
+            best_opp = None
+            best_diff = float('inf')
+            for j in range(i+1, len(available)):
+                opp = available[j]
+                if opp.name in used:
+                    continue
+                if opp.name in white.opponents:
+                    continue
+                diff = abs(white.points - opp.points)
+                if diff < best_diff:
+                    best_diff = diff
+                    best_opp = opp
+            if best_opp:
+                # Simple color assignment: alternate if possible
+                # For now, assign white to higher points? Later improve
+                pairs.append((white, best_opp))
+                used.add(white.name)
+                used.add(best_opp.name)
+            else:
+                used.add(white.name)
+        self.pairings = pairs
+        return pairs
+
+    def enter_result(self, white, black, result):
+        if result == '1-0':
+            white.points += 1.0
+            black.points += 0.0
+        elif result == '0-1':
+            white.points += 0.0
+            black.points += 1.0
+        elif result == '1/2-1/2':
+            white.points += 0.5
+            black.points += 0.5
+        else:
+            return
+        white.opponents.append(black.name)
+        black.opponents.append(white.name)
+        white.colors.append('white')
+        black.colors.append('black')
+
+
+# ---------- GUI Application ----------
+class ChessSwissApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Chess Swiss Tournament System")
+        self.root.geometry("950x700")
+        self.tournament = Tournament()
+
+        self.create_menu()
+        self.create_player_input()
+        self.create_player_list()
+        self.create_round_control()
+        self.create_pairings_display()
+        self.create_standings_display()
+
+        self.update_player_list()
+        self.update_standings()
+
+    def create_menu(self):
+        menubar = tk.Menu(self.root)
+        self.root.config(menu=menubar)
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Tournament", menu=file_menu)
+        file_menu.add_command(label="New Tournament", command=self.new_tournament)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.root.quit)
+
+    def create_player_input(self):
+        frame = ttk.LabelFrame(self.root, text="Add New Player")
+        frame.pack(fill="x", padx=10, pady=5)
+
+        ttk.Label(frame, text="Name:").grid(row=0, column=0, padx=5)
+        self.name_entry = ttk.Entry(frame, width=20)
+        self.name_entry.grid(row=0, column=1, padx=5)
+
+        ttk.Label(frame, text="Rating:").grid(row=0, column=2, padx=5)
+        self.rating_entry = ttk.Entry(frame, width=10)
+        self.rating_entry.grid(row=0, column=3, padx=5)
+
+        ttk.Button(frame, text="Add Player", command=self.add_player).grid(row=0, column=4, padx=10)
+        ttk.Button(frame, text="New Tournament", command=self.new_tournament).grid(row=0, column=5, padx=10)
+
+    def create_player_list(self):
+        frame = ttk.LabelFrame(self.root, text="Players List")
+        frame.pack(fill="both", expand=True, padx=10, pady=5)
+
+        self.player_tree = ttk.Treeview(frame, columns=("Name", "Rating", "Points"), show="headings")
+        self.player_tree.heading("Name", text="Name")
+        self.player_tree.heading("Rating", text="Rating")
+        self.player_tree.heading("Points", text="Points")
+        self.player_tree.pack(fill="both", expand=True)
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill="x", pady=5)
+        ttk.Button(btn_frame, text="Remove Selected", command=self.remove_player).pack(side="left", padx=5)
+
+    def create_round_control(self):
+        frame = ttk.LabelFrame(self.root, text="Round Control")
+        frame.pack(fill="x", padx=10, pady=5)
+
+        self.round_label = ttk.Label(frame, text="Current Round: 0")
+        self.round_label.pack(side="left", padx=10)
+
+        ttk.Button(frame, text="Pair First Round", command=self.pair_first_round).pack(side="left", padx=5)
+        ttk.Button(frame, text="Pair Next Round", command=self.pair_next_round).pack(side="left", padx=5)
+
+    def create_pairings_display(self):
+        frame = ttk.LabelFrame(self.root, text="Current Round Pairings")
+        frame.pack(fill="both", expand=True, padx=10, pady=5)
+
+        self.pairings_text = tk.Text(frame, height=8, wrap="word")
+        scroll = ttk.Scrollbar(frame, command=self.pairings_text.yview)
+        self.pairings_text.configure(yscrollcommand=scroll.set)
+        self.pairings_text.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill="x", pady=5)
+        ttk.Button(btn_frame, text="Enter Results", command=self.enter_results_dialog).pack(side="left", padx=5)
+
+    def create_standings_display(self):
+        frame = ttk.LabelFrame(self.root, text="Standings")
+        frame.pack(fill="both", expand=True, padx=10, pady=5)
+
+        self.standings_tree = ttk.Treeview(frame, columns=("Rank", "Name", "Rating", "Points"), show="headings")
+        self.standings_tree.heading("Rank", text="Rank")
+        self.standings_tree.heading("Name", text="Name")
+        self.standings_tree.heading("Rating", text="Rating")
+        self.standings_tree.heading("Points", text="Points")
+        self.standings_tree.pack(fill="both", expand=True)
+
+    def add_player(self):
+        name = self.name_entry.get().strip()
+        rating_str = self.rating_entry.get().strip()
+        if not name:
+            messagebox.showerror("Error", "Name is required")
+            return
+        try:
+            rating = int(rating_str) if rating_str else 1200
+        except:
+            messagebox.showerror("Error", "Rating must be integer")
+            return
+        self.tournament.add_player(name, rating)
+        self.name_entry.delete(0, tk.END)
+        self.rating_entry.delete(0, tk.END)
+        self.update_player_list()
+        self.update_standings()
+
+    def remove_player(self):
+        selected = self.player_tree.selection()
+        if not selected:
+            return
+        name = self.player_tree.item(selected[0], "values")[0]
+        self.tournament.remove_player(name)
+        self.update_player_list()
+        self.update_standings()
+
+    def update_player_list(self):
+        for row in self.player_tree.get_children():
+            self.player_tree.delete(row)
+        for p in self.tournament.players:
+            self.player_tree.insert("", tk.END, values=(p.name, p.rating, p.points))
+
+    def update_standings(self):
+        for row in self.standings_tree.get_children():
+            self.standings_tree.delete(row)
+        standings = self.tournament.get_standings()
+        for i, p in enumerate(standings, 1):
+            self.standings_tree.insert("", tk.END, values=(i, p.name, p.rating, p.points))
+
+    def pair_first_round(self):
+        if len(self.tournament.players) < 2:
+            messagebox.showerror("Error", "Need at least 2 players")
+            return
+        self.tournament.current_round = 1
+        pairs = self.tournament.pair_first_round()
+        self.display_pairings(pairs)
+        self.round_label.config(text=f"Current Round: {self.tournament.current_round}")
+
+    def pair_next_round(self):
+        if self.tournament.current_round == 0:
+            messagebox.showerror("Error", "First round not paired yet")
+            return
+        self.tournament.current_round += 1
+        pairs = self.tournament.pair_next_round()
+        self.display_pairings(pairs)
+        self.round_label.config(text=f"Current Round: {self.tournament.current_round}")
+
+    def display_pairings(self, pairs):
+        self.pairings_text.delete(1.0, tk.END)
+        if not pairs:
+            self.pairings_text.insert(tk.END, "No pairings yet.")
+            return
+        for i, (white, black) in enumerate(pairs, 1):
+            if black is None:
+                self.pairings_text.insert(tk.END, f"Board {i}: {white.name} (bye)\n")
+            else:
+                self.pairings_text.insert(tk.END, f"Board {i}: {white.name} (white) vs {black.name} (black)\n")
+        self.pairings_text.insert(tk.END, "\nUse 'Enter Results' to submit outcomes.")
+
+    def enter_results_dialog(self):
+        if not self.tournament.pairings:
+            messagebox.showinfo("Info", "No pairings to enter results.")
+            return
+        for white, black in self.tournament.pairings:
+            if black is None:
+                continue
+            res = simpledialog.askstring("Enter Result", 
+                f"Result for {white.name} (white) vs {black.name} (black)\nOptions: 1-0, 0-1, 1/2-1/2", 
+                parent=self.root)
+            if res not in ['1-0', '0-1', '1/2-1/2']:
+                messagebox.showerror("Error", "Invalid result. Skipping this board.")
+                continue
+            self.tournament.enter_result(white, black, res)
+        self.update_player_list()
+        self.update_standings()
+        self.tournament.pairings = []
+        self.pairings_text.delete(1.0, tk.END)
+        self.pairings_text.insert(tk.END, "Results entered. Ready for next round.")
+        messagebox.showinfo("Success", "Results saved!")
+
+    def new_tournament(self):
+        if messagebox.askyesno("New Tournament", "Clear all players and start new tournament?"):
+            self.tournament.clear_all()
+            self.update_player_list()
+            self.update_standings()
+            self.pairings_text.delete(1.0, tk.END)
+            self.round_label.config(text="Current Round: 0")
+            self.pairings_text.insert(tk.END, "New tournament created. Add players and pair first round.")
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = ChessSwissApp(root)
+    root.mainloop()
